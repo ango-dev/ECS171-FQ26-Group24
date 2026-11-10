@@ -1,0 +1,12 @@
+{
+ "dataset": "sms",
+ "seed": 171,
+ "dev_frac": 0.2,
+ "n_docs": 5159,
+ "n_spam": 642,
+ "n_dev": 1031,
+ "n_pool": 4128,
+ "n_pool_spam": 514,
+ "dev_distinct_tokens": 3362,
+ "max_n": 2048
+}
