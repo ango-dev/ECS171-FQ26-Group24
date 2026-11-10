@@ -1,0 +1,140 @@
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{textcomp}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{titlesec}
+
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.5em}{}
+\titlespacing*{\section}{0pt}{1.4ex plus 0.4ex minus 0.2ex}{0.6ex plus 0.2ex}
+\setlist[itemize]{topsep=4pt, itemsep=2pt, parsep=0pt}
+\renewcommand{\arraystretch}{1.25}
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+
+% Token pattern, typeset in monospace
+\newcommand{\tokpattern}{\texttt{[a-z0-9]+|[\pounds\$\texteuro!]}}
+
+\title{\vspace{-1.6cm}\textbf{ECS 171 MID-PROJECT REPORT:\\ Does Naive Bayes Really Learn in $\boldsymbol{O(\log n)}$?}\\[0.4ex] \Large\textbf{Measuring the Generative-Discriminative Crossover as Dimensionality Grows}}
+\author{Andrew Ngo \and Kevin Liu \and Bryce Lee}
+\date{\small\texttt{https://github.com/ango-dev/ECS171-FQ26-Group24}}
+
+\begin{document}
+
+\maketitle
+\vspace{-2.2em}
+
+\section{Assigned Paper and Project Motivation}
+
+This project tests the claims in Ng and Jordan (2001), \textit{``On Discriminative vs.\ Generative Classifiers: A Comparison of Logistic Regression and Naive Bayes.''} The paper compares a generative classifier (naive Bayes) against a discriminative classifier (logistic regression) under a shared feature assumption. It posits that naive Bayes requires $O(\log n)$ training examples to approach its asymptotic error, while logistic regression requires $O(n)$ examples but achieves a lower final error. Consequently, for a fixed number of features $n$, there is a theoretical crossover point $m^*(n)$ in training-set size where logistic regression outperforms naive Bayes. Spam classification provides a genuine binary text-classification task to empirically test these variables ($m$, $n$, and test error) using real text data rather than simulated datasets.
+
+The authors support the result with learning curves on 15 small UCI datasets but never vary $n$ directly, so the $\log n$ versus $n$ rates themselves are untested. With bag-of-words text the vocabulary size can be set to any value, which turns the rate claim into a measurable prediction about how the crossover moves as $n$ grows.
+
+\section{Problem Statement and Research Objectives}
+
+Does naive Bayes learn at the predicted $O(\log n)$ rate relative to logistic regression on real datasets? Our primary objectives are:
+\begin{itemize}
+  \item Measure test-error learning curves for both models as a function of training-set size ($m$) at fixed vocabulary sizes ($n$).
+  \item Identify the crossover point $m^*(n)$ where logistic regression achieves a lower test error than naive Bayes for each $n$.
+  \item Determine if $m^*(n)$ scales with $n$ according to the paper's asymptotics using log, linear, and power-law fits.
+  \item Assess whether this relationship holds across corpora of varying sizes and class balances.
+  \item Check whether the early naive Bayes advantage also appears under log-loss, or only under 0--1 misclassification error.
+\end{itemize}
+Currently, exploratory data analysis (EDA) and preprocessing are complete, but model training and objective testing have not started.
+
+\section{Dataset Description}
+
+The primary dataset is the SMS Spam Collection, which contains 5,159 English messages (\textasciitilde 87\% ham / 13\% spam) after deduplication. Because the usable training-set ceiling ($m_{\text{max}}$) at $n = 1{,}024$ is only $3.1 \times n$, the vocabulary grid is capped at $n = 2{,}048$. If the SMS data yields inconclusive results at larger $n$, the Enron-Spam corpus will serve as a larger, balanced contingency dataset. Features are represented as a binary bag-of-words using a custom token pattern (\tokpattern) that retains high-signal digits and currency symbols. All data splits are class-stratified to prevent single-class samples. The table below summarizes both corpora as measured in the EDA; $m_{\text{max}}$ is the experiment pool minus the test set.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+ & \textbf{SMS Spam Collection} & \textbf{Enron-Spam} \\
+\midrule
+Messages as downloaded (spam share) & 5,574 (13.4\%) & 33,716 (50.9\%) \\
+Messages after deduplication (spam share) & 5,159 (12.4\%) & 30,138 (48.3\%) \\
+20\% dev split: messages / distinct tokens & 1,031 / 3,362 & 6,028 / 65,469 \\
+Largest training set $m_{\text{max}}$ & 3,128 & 22,110 \\
+Vocabulary grid $n$ & 16 to 2,048 & 16 to 4,096 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Exploratory Data Analysis (EDA)}
+
+EDA on both raw corpora informed key choices: (1) \textit{Exact duplicates:} Deduplicated to prevent artificial accuracy inflation across train/test splits. (2) \textit{Class balance:} Stratified splits guarantee proper class representation in skewed datasets. (3) \textit{Surface cues:} Digits and symbols appear in \textasciitilde 77\% of spam vs.\ \textasciitilde 0.1\% of ham, prompting custom tokenization. (4) \textit{Vocabulary growth:} \textasciitilde 56\% of tokens occur once; vocabulary is ranked by mutual information on a held-out split. (5) \textit{Feasibility:} The ceiling on SMS training size necessitates the Enron-Spam contingency plan for larger $m$-sweeps.
+
+\textbf{Exact duplicates.} SMS contains 415 extra copies (7.4\% of messages) and Enron 3,578 (10.6\%). Spam is duplicated about twice as often as ham in both corpora (14.1\% vs.\ 6.4\% in SMS; 15.3\% vs.\ 5.8\% in Enron). No duplicated text carries two different labels, so copies can be dropped safely.
+
+\textbf{Class balance.} After deduplication SMS is 12.4\% spam and Enron 48.3\%. The imbalance matters most at small $m$: a stratified training set of $m = 64$ holds about 8 spam messages, and an unstratified set of $m = 8$ has roughly a one-in-three chance of containing no spam at all.
+
+\textbf{Message length and surface cues.} SMS spam is longer than ham (median 28 vs.\ 11 tokens). The \textasciitilde 77\% figure is for numbers of five or more digits; ``\pounds'' appears in 33\% of spam and ``!'' in 47\%. scikit-learn's default token pattern keeps only words of two or more characters and would drop ``\pounds'', ``!'', ``i'', ``u'', ``2'' and ``4''.
+
+\textbf{Vocabulary growth.} Both corpora are long-tailed (54\% of Enron tokens also occur once). The 20\% SMS dev split contains only 3,362 distinct tokens, fewer than the $n = 4{,}096$ originally proposed.
+
+\textbf{Feasibility.} After the dev split and test set, SMS leaves $m_{\text{max}} = 3{,}128$ and Enron 22,110. On SMS, $m_{\text{max}}$ falls below $10n$ beyond $n \approx 300$. Where a crossover lies beyond $m_{\text{max}}$ we can report only a lower bound.
+
+\section{Data Preprocessing and Feature Decisions}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.19\textwidth} L L@{}}
+\toprule
+\textbf{Decision} & \textbf{Implementation} & \textbf{Rationale} \\
+\midrule
+\textbf{Deduplication} & Drop exact repeats after lower-casing \& whitespace collapse. & Prevents verbatim repeats from leaking across splits. \\
+\textbf{Stratified dev split} & 20\% of each class held out for mutual information ranking. & Prevents vocabulary selection from accessing test data. \\
+\textbf{Stratified test/train} & Paired draws matching pool rate; min 1 example per class. & Prevents near-single-class test sets \& undefined priors at small $m$. \\
+\textbf{Tokenizer \& Features} & Custom pattern \tokpattern; Binary bag-of-words. & Retains high-signal digits/symbols; matches Ng \& Jordan (2001). \\
+\textbf{Vocab Ranking} & Top-$n$ tokens by mutual information on dev split. & Prioritizes rare high-signal tokens over non-discriminative ones. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+No hand-engineered features, stemming, or stop-word removals are applied, ensuring the feature space remains identical to the paper's theoretical framework.
+
+\section{Literature Review}
+
+This project relies entirely on Ng and Jordan (2001). The authors demonstrate that naive Bayes and logistic regression model the same joint distribution family. Naive Bayes fits $P(x, y)$ assuming conditional independence, converging in $O(\log n)$ examples, whereas logistic regression fits $P(y|x)$ directly, requiring $O(n)$ examples. While naive Bayes performs better at small training sizes, logistic regression achieves lower asymptotic error, creating a theoretical crossover point $m^*(n)$. This project tests these sample complexity bounds empirically under identical feature representations.
+
+\section{Initial Plan for Model Development and Experimentation}
+
+We will evaluate Multivariate Bernoulli naive Bayes with Laplace smoothing ($\alpha = 1$) alongside unregularized/default Logistic Regression ($L_2$ penalty, default solver). Pipeline sweeps will evaluate a hand-picked grid of sample sizes $m$ using Monte Carlo repeated train/test splits. Paired t-tests across repeated runs will evaluate significance at each $m$ point. Both 0--1 test error and log-loss will be recorded for every fit. Multinomial naive Bayes will be run alongside as a baseline, and the proposal's target of 200 or more repeated splits per corpus sets the scale of the sweep.
+
+\section{Project Roadmap and Progress}
+
+Stage 0 (Brainstorm/Feasibility) and Stage 0.5 (EDA/Preprocessing) are complete. Stage 1 (Data Pipeline) is currently in progress. Stages 2--9 (Model implementation, sweeps, significance testing, and paper write-up) have not been started. The immediate milestone is establishing a single end-to-end split harness, with the proposal's first gate being an end-to-end run at $n = 64$. The later gates follow the proposal's order: all $(n, m)$ runs logged, then results frozen after the significance tests, crossover estimates and scaling fits, then the paper and presentation.
+
+\section{Team-Member Roles and Contributions}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.15\textwidth} L L@{}}
+\toprule
+\textbf{Owner} & \textbf{Responsibility} & \textbf{Status} \\
+\midrule
+\textbf{Kevin Liu} & Data pipeline, corpus cleaning, feature matrices, split/training harness, experiment execution. & Corpus cleaning and EDA complete. Pipeline design in progress. \\
+\textbf{Andrew Ngo} & Model implementation, statistical analysis, crossover estimation, scaling fits. & Not started; pending data pipeline completion. \\
+\textbf{Bryce Lee} & Theoretical mapping, figure production, report drafting, presentation slides. & Literature review drafted; figures/write-up pending experiment results. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section*{References}
+
+\begin{itemize}[leftmargin=*, label={}]
+\small
+  \item Ng, A. Y., \& Jordan, M. I. (2001). On discriminative vs.\ generative classifiers: A comparison of logistic regression and naive Bayes. \textit{Advances in Neural Information Processing Systems 14}, 841--848.
+  \item Almeida, T. A., G\'omez Hidalgo, J. M., \& Yamakami, A. (2012). SMS Spam Collection. UCI Machine Learning Repository.
+  \item Metsis, V., Androutsopoulos, I., \& Paliouras, G. (2006). Spam filtering with naive Bayes -- which naive Bayes? \textit{Third Conference on Email and Anti-Spam (CEAS)}.
+\end{itemize}
+
+\end{document}
