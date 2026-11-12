@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Naive Bayes vs Logistic Regression demo</title>
+</head>
+<body>
+
+<h1>Does naive Bayes really learn faster than logistic regression?</h1>
+<p>ECS 171, Group 24 (Andrew Ngo, Kevin Liu, Bryce Lee)</p>
+<p>Two spam filters trained on the same m messages, using the n most informative words.
+Change m and see which one gets the message right.</p>
+
+<hr>
+<h2>1. Live demo</h2>
+
+<p>
+Corpus: <select id="ds"></select>
+&nbsp; Vocabulary size n: <select id="n"></select>
+</p>
+<p>
+Training size m: <input id="m" type="range" min="0" step="1" style="width:400px; vertical-align:middle"> <b id="mout"></b>
+</p>
+
+<p>
+<textarea id="msg" rows="7" cols="90" spellcheck="false"></textarea><br>
+<button id="rs">Random spam from the test set</button>
+<button id="rh">Random non-spam from the test set</button>
+</p>
+
+<pre id="out"></pre>
+
+<h3>Mean test error over 200 splits, for this corpus and n</h3>
+<pre id="tbl"></pre>
+
+<h3>Vocabulary ranking: top words for this corpus</h3>
+<p>Words are ranked by mutual information (MI) with the spam label, measured on a separate 20% of the corpus.
+A vocabulary of size n is the first n words of this list. The weights are what each model learned at the current m.</p>
+<pre id="vocab"></pre>
+
+<hr>
+<h2>2. Results from the experiments</h2>
+<p>Mean test error against training size m, one panel per vocabulary size n.
+NB (α = 0.01) and LR are the two models in the demo above.</p>
+
+<h3>Enron-Spam</h3>
+<img src="enron_curves.png" alt="Enron-Spam: mean test error over 200 splits for each vocabulary size" style="max-width:100%">
+
+<h3>SMS Spam Collection</h3>
+<img src="sms_curves.png" alt="SMS Spam: mean test error over 200 splits for each vocabulary size" style="max-width:100%">
+
+<hr>
+<p><small>The two classifiers in the demo are the fits from one of the 200 splits, exported as weights and run in
+the browser. Naive Bayes is Bernoulli naive Bayes with α = 0.01. Logistic regression is unregularized (C = 10,000).
+The random test messages were never used for training or for choosing the vocabulary.</small></p>
+
+<script src="data.js"></script>
+<script>
+(function () {
+  var D = window.DEMO;
+  var $ = function (id) { return document.getElementById(id); };
+  var truth = null;
+  var num = function (v) { return v.toLocaleString("en-US"); };
+  var pct = function (v) { return (v * 100).toFixed(1) + "%"; };
+  var pad = function (s, w) { s = String(s); while (s.length < w) s += " "; return s; };
+  var lpad = function (s, w) { s = String(s); while (s.length < w) s = " " + s; return s; };
+
+  // word -> rank in the vocabulary, per corpus
+  var index = {};
+  Object.keys(D).forEach(function (k) {
+    index[k] = Object.create(null);
+    D[k].vocab.forEach(function (t, j) { index[k][t] = j; });
+    $("ds").add(new Option(D[k].label, k));
+  });
+  $("ds").value = "enron";
+
+  function fillN() {
+    $("n").length = 0;
+    Object.keys(D[$("ds").value].n).forEach(function (n) { $("n").add(new Option(num(+n) + " words", n)); });
+    $("n").value = "64";
+    $("m").max = D[$("ds").value].m.length - 1;
+    if (+$("m").value > +$("m").max) $("m").value = $("m").max;
+  }
+
+  // log-odds of spam = bias + sum of the weights of the vocabulary words present in the message
+  function score(w, present, vocab) {
+    var z = w[0], parts = [];
+    present.forEach(function (j) { z += w[j + 1]; parts.push({ word: vocab[j], w: w[j + 1] }); });
+    parts.sort(function (a, b) { return Math.abs(b.w) - Math.abs(a.w); });
+    return { z: z, p: 1 / (1 + Math.exp(-z)), parts: parts.slice(0, 5) };
+  }
+
+  function crossover(nb, lr) {          // first index from which LR stays ahead, or -1
+    var i = nb.length;
+    while (i > 0 && lr[i - 1] < nb[i - 1]) i--;
+    return i < nb.length ? i : -1;
+  }
+
+  function render() {
+    var ds = D[$("ds").value], n = +$("n").value, c = ds.n[n], mi = +$("m").value, m = ds.m[mi];
+    $("mout").textContent = "m = " + num(m) + " messages";
+
+    var toks = $("msg").value.toLowerCase().match(/[a-z0-9]+|[£$€!]/g) || [];
+    var seen = {}, present = [], ix = index[$("ds").value];
+    toks.forEach(function (t) {
+      var j = ix[t];
+      if (j !== undefined && j < n && !seen[j]) { seen[j] = 1; present.push(j); }
+    });
+    var nb = score(c.w.nb[mi], present, ds.vocab), lr = score(c.w.lr[mi], present, ds.vocab);
+    var call = function (r) { return r.z > 0 ? "SPAM" : "not spam"; };
+    var words = function (r) {
+      return r.parts.map(function (q) { return q.word + " (" + (q.w > 0 ? "+" : "") + q.w.toFixed(1) + ")"; }).join("  ") || "-";
+    };
+    var W = 24, L = 26;
+    var lines = [
+      pad("", L) + pad("Naive Bayes", W) + "Logistic regression",
+      pad("Prediction", L) + pad(call(nb), W) + call(lr),
+      pad("Estimated chance of spam", L) + pad(pct(nb.p), W) + pct(lr.p),
+      pad("Mean test error at this m", L) + pad(pct(c.err.nb[mi]), W) + pct(c.err.lr[mi]),
+      "",
+      "True label: " + (truth == null ? "(your own message)" : truth ? "SPAM" : "not spam"),
+      "Words in the vocabulary: " + present.length + " of the " + n + " are in this message",
+      "",
+      "Strongest words, naive Bayes:         " + words(nb),
+      "Strongest words, logistic regression: " + words(lr),
+      "(+ pushes toward spam, - pushes toward not spam)"
+    ];
+    $("out").textContent = lines.join("\n");
+
+    var ci = crossover(c.err.nb, c.err.lr);
+    var rows = [lpad("m", 8) + lpad("NB", 9) + lpad("LR", 9) + "   ahead"];
+    ds.m.forEach(function (mm, i) {
+      var a = c.err.nb[i], b = c.err.lr[i];
+      rows.push(lpad(num(mm), 8) + lpad(pct(a), 9) + lpad(pct(b), 9) + "   " + (a < b ? "NB" : b < a ? "LR" : "tie") +
+        (i === mi ? "   <-- current m" : ""));
+    });
+    rows.push("");
+    rows.push(ci === 0 ? "Logistic regression is ahead at every training size."
+      : ci > 0 ? "Naive Bayes is ahead on small training sets. Logistic regression stays ahead from m = " + num(ds.m[ci]) + "."
+      : "Logistic regression never takes over: this corpus runs out of data at m = " + num(ds.m[ds.m.length - 1]) + ".");
+    $("tbl").textContent = rows.join("\n");
+
+    var sgn = function (v) { return (v > 0 ? "+" : "") + v.toFixed(2); };
+    var vr = [lpad("rank", 4) + "  " + pad("word", 14) + lpad("MI", 8) + lpad("NB weight", 12) + lpad("LR weight", 12) + "   in message"];
+    ds.mi.forEach(function (mi_j, j) {
+      var inN = j < n;
+      vr.push(lpad(j + 1, 4) + "  " + pad(ds.vocab[j], 14) + lpad(mi_j.toFixed(4), 8) +
+        lpad(inN ? sgn(c.w.nb[mi][j + 1]) : "-", 12) + lpad(inN ? sgn(c.w.lr[mi][j + 1]) : "-", 12) +
+        (seen[j] ? "   yes" : ""));
+    });
+    vr.push("");
+    vr.push("Showing the top " + ds.mi.length + " of " + num(n) + " words in use. " +
+      "Weight > 0 pushes toward spam, < 0 toward not spam" + (n < ds.mi.length ? ", - means outside the current vocabulary." : "."));
+    $("vocab").textContent = vr.join("\n");
+  }
+
+  function sample(label) {
+    var pool = D[$("ds").value].samples.filter(function (s) { return s.spam === label && s.text !== $("msg").value; });
+    $("msg").value = pool[Math.floor(Math.random() * pool.length)].text;
+    truth = label;
+    render();
+  }
+
+  $("ds").onchange = function () { fillN(); sample(1); };
+  $("n").onchange = render;
+  $("m").oninput = render;
+  $("msg").oninput = function () { truth = null; render(); };
+  $("rs").onclick = function () { sample(1); };
+  $("rh").onclick = function () { sample(0); };
+
+  fillN();
+  $("m").value = 6;
+  sample(1);
+})();
+</script>
+</body>
+</html>
